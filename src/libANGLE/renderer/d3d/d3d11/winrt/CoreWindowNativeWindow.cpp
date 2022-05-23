@@ -9,6 +9,8 @@
 #include "libANGLE/renderer/d3d/d3d11/winrt/CoreWindowNativeWindow.h"
 
 #include <windows.graphics.display.h>
+#include <windows.graphics.display.core.h>
+#include <windows.system.profile.h>
 
 using namespace ABI::Windows::Foundation::Collections;
 
@@ -139,6 +141,92 @@ void CoreWindowNativeWindow::unregisterForSizeChangeEvents()
     mSizeChangedEventToken.value = 0;
 }
 
+static bool RunningOnXbox()
+{
+    ComPtr<ABI::Windows::System::Profile::IAnalyticsInfoStatics> analyticsInfoStatics;
+    if (SUCCEEDED(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_System_Profile_AnalyticsInfo).Get(),
+            analyticsInfoStatics.GetAddressOf())))
+    {
+        ComPtr<ABI::Windows::System::Profile::IAnalyticsVersionInfo> analyticsVersionInfo;
+        if (SUCCEEDED(analyticsInfoStatics->get_VersionInfo(&analyticsVersionInfo)))
+        {
+            HSTRING deviceFamily;
+            if (SUCCEEDED(analyticsVersionInfo->get_DeviceFamily(&deviceFamily)))
+            {
+                HSTRING xboxDeviceFamily;
+                if (SUCCEEDED(WindowsCreateString(L"Windows.Xbox", 12, &xboxDeviceFamily)))
+                {
+                    INT32 result = -1;
+                    if (SUCCEEDED(
+                            WindowsCompareStringOrdinal(deviceFamily, xboxDeviceFamily, &result)))
+                    {
+                        return result == 0;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static unsigned int GetHeight()
+{
+    ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayInformationStatics> displayInformationStatics;
+
+    if (SUCCEEDED(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_Graphics_Display_Core_HdmiDisplayInformation)
+                .Get(),
+            displayInformationStatics.GetAddressOf())))
+    {
+        ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayInformation> displayInformation;
+        if (SUCCEEDED(displayInformationStatics->GetForCurrentView(&displayInformation)))
+        {
+            ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayMode> curHdmiDisplayMode;
+            if (SUCCEEDED(displayInformation->GetCurrentDisplayMode(&curHdmiDisplayMode)))
+            {
+                unsigned int height;
+                if (SUCCEEDED(curHdmiDisplayMode->get_ResolutionHeightInRawPixels(&height)))
+                {
+                    return height;
+                }
+            }
+        }
+    }
+
+    // Return 96 dpi as a default if display properties cannot be obtained.
+    return 1080;
+}
+
+static unsigned int GetWidth()
+{
+    ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayInformationStatics>
+        displayInformationStatics;
+
+    if (SUCCEEDED(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_Graphics_Display_Core_HdmiDisplayInformation)
+                .Get(),
+            displayInformationStatics.GetAddressOf())))
+    {
+        ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayInformation> displayInformation;
+        if (SUCCEEDED(displayInformationStatics->GetForCurrentView(&displayInformation)))
+        {
+            ComPtr<ABI::Windows::Graphics::Display::Core::IHdmiDisplayMode> curHdmiDisplayMode;
+            if (SUCCEEDED(displayInformation->GetCurrentDisplayMode(&curHdmiDisplayMode)))
+            {
+                unsigned int width;
+                if (SUCCEEDED(curHdmiDisplayMode->get_ResolutionWidthInRawPixels(&width)))
+                {
+                    return width;
+                }
+            }
+        }
+    }
+
+    // Return 96 dpi as a default if display properties cannot be obtained.
+    return 1080;
+}
+
 HRESULT CoreWindowNativeWindow::createSwapChain(ID3D11Device *device,
                                                 IDXGIFactory2 *factory,
                                                 DXGI_FORMAT format,
@@ -154,8 +242,16 @@ HRESULT CoreWindowNativeWindow::createSwapChain(ID3D11Device *device,
     }
 
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {0};
-    swapChainDesc.Width                 = width;
-    swapChainDesc.Height                = height;
+    if (RunningOnXbox())
+    {
+        swapChainDesc.Width  = GetWidth();
+        swapChainDesc.Height = GetHeight();
+    }
+    else
+    {
+        swapChainDesc.Width  = width;
+        swapChainDesc.Height = height;
+    }
     swapChainDesc.Format                = format;
     swapChainDesc.Stereo                = FALSE;
     swapChainDesc.SampleDesc.Count      = 1;
@@ -205,7 +301,15 @@ HRESULT GetCoreWindowSizeInPixels(const ComPtr<ABI::Windows::UI::Core::ICoreWind
     HRESULT result = coreWindow->get_Bounds(&bounds);
     if (SUCCEEDED(result))
     {
-        *windowSize = {ConvertDipsToPixels(bounds.Width), ConvertDipsToPixels(bounds.Height)};
+        if (RunningOnXbox())
+        {
+            *windowSize = {(float)GetWidth(), (float)GetHeight()};
+        }
+        else
+        {
+            *windowSize = {ConvertDipsToPixels(bounds.Width), ConvertDipsToPixels(bounds.Height)};
+        }
+        
     }
 
     return result;
