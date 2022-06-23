@@ -536,6 +536,62 @@ bool ValidateMultiDrawElementsIndirectEXT(const Context *context,
     return true;
 }
 
+bool ValidateDrawArraysInstancedBaseInstanceEXT(const Context *context,
+                                                angle::EntryPoint entryPoint,
+                                                PrimitiveMode mode,
+                                                GLint first,
+                                                GLsizei count,
+                                                GLsizei instanceCount,
+                                                GLuint baseInstance)
+{
+    if (!context->getExtensions().baseInstanceEXT)
+    {
+        context->validationError(entryPoint, GL_INVALID_OPERATION, kExtensionNotEnabled);
+        return false;
+    }
+
+    return ValidateDrawArraysInstancedBase(context, entryPoint, mode, first, count, instanceCount);
+}
+
+bool ValidateDrawElementsInstancedBaseInstanceEXT(const Context *context,
+                                                  angle::EntryPoint entryPoint,
+                                                  PrimitiveMode mode,
+                                                  GLsizei count,
+                                                  DrawElementsType type,
+                                                  void const *indices,
+                                                  GLsizei instancecount,
+                                                  GLuint baseinstance)
+{
+    if (!context->getExtensions().baseInstanceEXT)
+    {
+        context->validationError(entryPoint, GL_INVALID_OPERATION, kExtensionNotEnabled);
+        return false;
+    }
+
+    return ValidateDrawElementsInstancedBase(context, entryPoint, mode, count, type, indices,
+                                             instancecount);
+}
+
+bool ValidateDrawElementsInstancedBaseVertexBaseInstanceEXT(const Context *context,
+                                                            angle::EntryPoint entryPoint,
+                                                            PrimitiveMode mode,
+                                                            GLsizei count,
+                                                            DrawElementsType typePacked,
+                                                            const void *indices,
+                                                            GLsizei instancecount,
+                                                            GLint basevertex,
+                                                            GLuint baseinstance)
+{
+    if (!context->getExtensions().baseInstanceEXT)
+    {
+        context->validationError(entryPoint, GL_INVALID_OPERATION, kExtensionNotEnabled);
+        return false;
+    }
+
+    return ValidateDrawElementsInstancedBase(context, entryPoint, mode, count, typePacked, indices,
+                                             instancecount);
+}
+
 bool ValidateDrawElementsBaseVertexOES(const Context *context,
                                        angle::EntryPoint entryPoint,
                                        PrimitiveMode mode,
@@ -3039,7 +3095,8 @@ bool ValidateShadingRateQCOM(const Context *context, angle::EntryPoint entryPoin
         return false;
     }
 
-    if (gl::FromGLenum<gl::ShadingRate>(rate) == gl::ShadingRate::InvalidEnum)
+    gl::ShadingRate shadingRate = gl::FromGLenum<gl::ShadingRate>(rate);
+    if (shadingRate == gl::ShadingRate::Undefined || shadingRate == gl::ShadingRate::InvalidEnum)
     {
         context->validationError(entryPoint, GL_INVALID_ENUM, kInvalidShadingRate);
         return false;

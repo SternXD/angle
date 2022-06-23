@@ -2953,7 +2953,7 @@ void main() {
 }
 
 // Tests whole-array assignment to an SSBO.
-TEST_P(ShaderStorageBufferTest31, ArrayAssignSSBO)
+TEST_P(ShaderStorageBufferTest31, AggregateArrayAssignmentSSBO)
 {
     constexpr char kCS[] = R"(#version 310 es
 
@@ -2995,6 +2995,170 @@ void main() {
     {
         EXPECT_EQ(static_cast<const GLuint *>(bufferData)[idx], idx);
     }
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+    EXPECT_GL_NO_ERROR();
+}
+
+// Tests whole-struct assignment to an SSBO.
+TEST_P(ShaderStorageBufferTest31, AggregateStructAssignmentSSBO)
+{
+    constexpr char kCS[] = R"(#version 310 es
+
+struct StructValues {
+    float f;
+    int i;
+};
+
+
+layout(std430, binding = 0) buffer block {
+    StructValues s;
+} instance;
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    instance.s = StructValues(123.0f, 321);
+})";
+
+    ANGLE_GL_COMPUTE_PROGRAM(program, kCS);
+
+    glUseProgram(program);
+
+    constexpr size_t kSize = sizeof(GLfloat) + sizeof(GLint);
+
+    // Create shader storage buffer
+    GLBuffer shaderStorageBuffer;
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, kSize, nullptr, GL_STATIC_DRAW);
+
+    // Bind shader storage buffer
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, shaderStorageBuffer);
+
+    glDispatchCompute(1, 1, 1);
+
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer);
+    const void *bufferData = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kSize, GL_MAP_READ_BIT);
+
+    EXPECT_EQ(static_cast<const GLfloat *>(bufferData)[0], 123.0f);
+    EXPECT_EQ(static_cast<const GLint *>(bufferData)[1], 321);
+
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+    EXPECT_GL_NO_ERROR();
+}
+
+// Tests two SSBOs in the fragment shader.
+TEST_P(ShaderStorageBufferTest31, TwoSSBOsInFragmentShader)
+{
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+
+layout(binding = 0, std430) buffer block0 {
+    float value;
+} result0;
+
+layout(binding = 1, std430) buffer block1 {
+    float value;
+} result1;
+
+void main() {
+    result0.value = 0.5f;
+    result1.value = 42.0f;
+}
+)";
+
+    constexpr size_t kSize[2] = {sizeof(GLfloat), sizeof(GLfloat)};
+    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), kFS);
+
+    // Create shader storage buffers
+    GLBuffer shaderStorageBuffer[2];
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[0]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, kSize[0], nullptr, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[1]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, kSize[1], nullptr, GL_STATIC_DRAW);
+
+    // Bind shader storage buffers
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, shaderStorageBuffer[0]);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, shaderStorageBuffer[1]);
+
+    drawQuad(program, essl31_shaders::PositionAttrib(), 0.95f);
+    ASSERT_GL_NO_ERROR();
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[0]);
+    const void *buffer0Data =
+        glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kSize[0], GL_MAP_READ_BIT);
+    EXPECT_EQ(static_cast<const GLfloat *>(buffer0Data)[0], 0.5f);
+
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[1]);
+    const void *buffer1Data =
+        glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kSize[1], GL_MAP_READ_BIT);
+    EXPECT_EQ(static_cast<const GLfloat *>(buffer1Data)[0], 42.0f);
+
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+    EXPECT_GL_NO_ERROR();
+}
+
+// Tests two SSBOs in a compute shader.
+TEST_P(ShaderStorageBufferTest31, TwoSSBOsInComputeShader)
+{
+    constexpr char kCS[] = R"(#version 310 es
+
+layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+
+layout(binding = 0, std430) buffer block0 {
+    float value;
+} result0;
+
+layout(binding = 1, std430) buffer block1 {
+    float value;
+} result1;
+
+void main() {
+    result0.value = 0.5f;
+    result1.value = 42.0f;
+}
+)";
+
+    constexpr size_t kSize[2] = {sizeof(GLfloat), sizeof(GLfloat)};
+    ANGLE_GL_COMPUTE_PROGRAM(program, kCS);
+    glUseProgram(program);
+
+    // Create shader storage buffers
+    GLBuffer shaderStorageBuffer[2];
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[0]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, kSize[0], nullptr, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[1]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, kSize[1], nullptr, GL_STATIC_DRAW);
+
+    // Bind shader storage buffers
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, shaderStorageBuffer[0]);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, shaderStorageBuffer[1]);
+
+    glDispatchCompute(1, 1, 1);
+    ASSERT_GL_NO_ERROR();
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[0]);
+    const void *buffer0Data =
+        glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kSize[0], GL_MAP_READ_BIT);
+    EXPECT_EQ(static_cast<const GLfloat *>(buffer0Data)[0], 0.5f);
+
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, shaderStorageBuffer[1]);
+    const void *buffer1Data =
+        glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kSize[1], GL_MAP_READ_BIT);
+    EXPECT_EQ(static_cast<const GLfloat *>(buffer1Data)[0], 42.0f);
+
     glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
 
     EXPECT_GL_NO_ERROR();

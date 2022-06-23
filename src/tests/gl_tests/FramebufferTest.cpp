@@ -11,6 +11,7 @@
 #include "platform/FeaturesD3D_autogen.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
+#include "util/OSWindow.h"
 
 using namespace angle;
 
@@ -1174,6 +1175,129 @@ void main()
     // Draw with simple program.
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f, 1.0f, true);
     ASSERT_GL_NO_ERROR();
+}
+
+class FramebufferTest_ES3Metal : public FramebufferTest_ES3
+{};
+
+// Metal, iOS has a limit of the number of bits that can be output
+// to color attachments. Test we're enforcing that limit.
+TEST_P(FramebufferTest_ES3Metal, TooManyBitsGeneratesFramebufferUnsupported)
+{
+    ANGLE_SKIP_TEST_IF(!GetParam().isEnabled(Feature::LimitMaxColorTargetBitsForTesting));
+
+    GLint maxDrawBuffers;
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
+
+    GLFramebuffer framebuffer;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    // Test maxDrawBuffers * RGBA8UI works.
+    {
+        std::vector<GLTexture> textures(maxDrawBuffers);
+        for (GLint i = 0; i < maxDrawBuffers; ++i)
+        {
+            glBindTexture(GL_TEXTURE_2D, textures[i]);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8UI, 1, 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D,
+                                   textures[i], 0);
+        }
+        EXPECT_GL_NO_ERROR();
+        EXPECT_GLENUM_EQ(GL_FRAMEBUFFER_COMPLETE, glCheckFramebufferStatus(GL_FRAMEBUFFER));
+    }
+
+    // Test maxDrawBuffers * RGBA32UI does not work.
+    {
+        std::vector<GLTexture> textures(maxDrawBuffers);
+        for (GLint i = 0; i < maxDrawBuffers; ++i)
+        {
+            glBindTexture(GL_TEXTURE_2D, textures[i]);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32UI, 1, 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D,
+                                   textures[i], 0);
+        }
+        EXPECT_GL_NO_ERROR();
+        EXPECT_GLENUM_EQ(GL_FRAMEBUFFER_UNSUPPORTED, glCheckFramebufferStatus(GL_FRAMEBUFFER));
+    }
+}
+
+// Metal, iOS has a limit of the number of bits that can be output
+// to color attachments. Test we're enforcing that limit.
+// This test is separate from the one above as it's possible
+// glCheckFramebufferStatus might cache some calculation so we
+// don't call here to ensure we get INVALID_FRAMEBUFFER_OPERATION
+// when drawing.
+TEST_P(FramebufferTest_ES3Metal, TooManyBitsGeneratesInvalidFramebufferOperation)
+{
+    ANGLE_SKIP_TEST_IF(!GetParam().isEnabled(Feature::LimitMaxColorTargetBitsForTesting));
+
+    GLint maxDrawBuffers;
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
+
+    GLFramebuffer framebuffer;
+    std::vector<GLTexture> textures(maxDrawBuffers);
+    std::vector<GLenum> drawBuffers(maxDrawBuffers, GL_NONE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    std::stringstream fs;
+
+    fs << R"(#version 300 es
+      precision highp float;
+      out uvec4 fragColor[)"
+       << maxDrawBuffers << R"(];
+      void main() {
+      )";
+
+    for (GLint i = 0; i < maxDrawBuffers; ++i)
+    {
+        fs << "  fragColor[" << i << "] = uvec4(" << i << ", " << i * 2 << ", " << i * 4 << ", "
+           << i * 8 << ");\n";
+        drawBuffers[i] = GL_COLOR_ATTACHMENT0 + i;
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8UI, 1, 1, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE,
+                     nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, textures[i],
+                               0);
+    }
+    EXPECT_GL_NO_ERROR();
+
+    fs << "}";
+
+    constexpr const char vs[] = R"(#version 300 es
+      void main() {
+        gl_Position = vec4(0, 0, 0, 1);
+        gl_PointSize = 1.0;
+      }
+    )";
+
+    GLProgram program;
+    program.makeRaster(vs, fs.str().c_str());
+    glUseProgram(program);
+    EXPECT_GL_NO_ERROR();
+
+    // Validate we can draw to maxDrawBuffers attachments
+    glDrawBuffers(maxDrawBuffers, drawBuffers.data());
+    glDrawArrays(GL_POINTS, 0, 1);
+    EXPECT_GL_NO_ERROR();
+
+    for (GLint i = 0; i < maxDrawBuffers; ++i)
+    {
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 1, 1, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT,
+                     nullptr);
+    }
+    EXPECT_GL_NO_ERROR();
+
+    glDrawArrays(GL_POINTS, 0, 1);
+    EXPECT_GLENUM_EQ(GL_INVALID_FRAMEBUFFER_OPERATION, glGetError());
 }
 
 class FramebufferTestWithFormatFallback : public ANGLETest
@@ -4133,6 +4257,223 @@ void main()
     }
 }
 
+// Regression test for a bug in the Vulkan backend where the application produces a conditional
+// framebuffer feedback loop which results in VUID-VkDescriptorImageInfo-imageLayout-00344 and
+// VUID-vkCmdDraw-None-02699 (or VUID-vkCmdDrawIndexed-None-02699 when a different draw call is
+// used). The application samples from the frame buffer it renders to depending on a uniform
+// condition.
+TEST_P(FramebufferTest_ES3, FramebufferConditionalFeedbackLoop)
+{
+    GLTexture colorAttachment;
+    glBindTexture(GL_TEXTURE_2D, colorAttachment);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kWidth, kHeight);
+
+    glActiveTexture(GL_TEXTURE13);
+    glBindTexture(GL_TEXTURE_2D, colorAttachment);
+
+    ASSERT_GL_NO_ERROR();
+
+    GLFramebuffer framebuffer;
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorAttachment, 0);
+
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    constexpr char kFS[] = {
+        R"(#version 300 es
+precision mediump float;
+
+uniform mediump sampler2D samp;
+uniform vec4 sampleCondition;
+out vec4 color;
+
+void main()
+{
+    if (sampleCondition.x > 0.0)
+    {
+        color = texture(samp, vec2(0.0));
+    }
+})",
+    };
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    glUseProgram(program);
+
+    GLint textureLoc = glGetUniformLocation(program, "samp");
+    glUniform1i(textureLoc, 13);
+
+    // This draw is required for the issue to occur. The application does multiple draws to
+    // different framebuffers at this point, but drawing without a framebuffer bound also does
+    // reproduce it.
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    ASSERT_GL_NO_ERROR();
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    // This draw triggers the issue.
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Tests change of framebuffer dimensions vs gl_FragCoord.
+TEST_P(FramebufferTest_ES3, FramebufferDimensionsChangeAndFragCoord)
+{
+    constexpr char kVS[] = R"(#version 300 es
+precision highp float;
+uniform float height;
+void main()
+{
+    // gl_VertexID    x    y
+    //      0        -1   -1
+    //      1         1   -1
+    //      2        -1    1
+    //      3         1    1
+    int bit0 = gl_VertexID & 1;
+    int bit1 = gl_VertexID >> 1;
+    gl_Position = vec4(bit0 * 2 - 1, bit1 * 2 - 1, gl_VertexID % 2 == 0 ? -1 : 1, 1);
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 colorOut;
+void main()
+{
+    float red = gl_FragCoord.x < 10. ? 1.0 : 0.0;
+    float green = gl_FragCoord.y < 25. ? 1.0 : 0.0;
+    colorOut = vec4(red, green, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+
+    constexpr GLuint kWidth1       = 99;
+    constexpr GLuint kHeight1      = 142;
+    constexpr GLuint kWidth2       = 75;
+    constexpr GLuint kHeight2      = 167;
+    constexpr GLuint kRenderSplitX = 10;
+    constexpr GLuint kRenderSplitY = 25;
+
+    glViewport(0, 0, std::max(kWidth1, kWidth2), std::max(kHeight1, kHeight2));
+
+    GLTexture tex1, tex2;
+    glBindTexture(GL_TEXTURE_2D, tex1);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kWidth1, kHeight1);
+    glBindTexture(GL_TEXTURE_2D, tex2);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kWidth2, kHeight2);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex1, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glUseProgram(program);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // Verify results
+    EXPECT_PIXEL_RECT_EQ(0, 0, kRenderSplitX, kRenderSplitY, GLColor::yellow);
+    EXPECT_PIXEL_RECT_EQ(0, kRenderSplitY, kRenderSplitX, kHeight1 - kRenderSplitY, GLColor::red);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, 0, kWidth1 - kRenderSplitX, kRenderSplitY, GLColor::green);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, kRenderSplitY, kWidth1 - kRenderSplitX,
+                         kHeight1 - kRenderSplitY, GLColor::black);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex2, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // Verify results
+    EXPECT_PIXEL_RECT_EQ(0, 0, kRenderSplitX, kRenderSplitY, GLColor::yellow);
+    EXPECT_PIXEL_RECT_EQ(0, kRenderSplitY, kRenderSplitX, kHeight2 - kRenderSplitY, GLColor::red);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, 0, kWidth2 - kRenderSplitX, kRenderSplitY, GLColor::green);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, kRenderSplitY, kWidth2 - kRenderSplitX,
+                         kHeight2 - kRenderSplitY, GLColor::black);
+
+    ASSERT_GL_NO_ERROR();
+}
+
+// Tests change of surface dimensions vs gl_FragCoord.
+TEST_P(FramebufferTest_ES3, SurfaceDimensionsChangeAndFragCoord)
+{
+    constexpr char kVS[] = R"(#version 300 es
+precision highp float;
+uniform float height;
+void main()
+{
+    // gl_VertexID    x    y
+    //      0        -1   -1
+    //      1         1   -1
+    //      2        -1    1
+    //      3         1    1
+    int bit0 = gl_VertexID & 1;
+    int bit1 = gl_VertexID >> 1;
+    gl_Position = vec4(bit0 * 2 - 1, bit1 * 2 - 1, gl_VertexID % 2 == 0 ? -1 : 1, 1);
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 colorOut;
+void main()
+{
+    float red = gl_FragCoord.x < 10. ? 1.0 : 0.0;
+    float green = gl_FragCoord.y < 25. ? 1.0 : 0.0;
+    colorOut = vec4(red, green, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+
+    constexpr GLuint kWidth1       = 99;
+    constexpr GLuint kHeight1      = 142;
+    constexpr GLuint kWidth2       = 75;
+    constexpr GLuint kHeight2      = 167;
+    constexpr GLuint kRenderSplitX = 10;
+    constexpr GLuint kRenderSplitY = 25;
+
+    glViewport(0, 0, std::max(kWidth1, kWidth2), std::max(kHeight1, kHeight2));
+
+    const bool isSwappedDimensions = GetParam().isEnabled(Feature::EmulatedPrerotation90) ||
+                                     GetParam().isEnabled(Feature::EmulatedPrerotation270);
+
+    auto resizeWindow = [this, isSwappedDimensions](GLuint width, GLuint height) {
+        if (isSwappedDimensions)
+        {
+            getOSWindow()->resize(height, width);
+        }
+        else
+        {
+            getOSWindow()->resize(width, height);
+        }
+        swapBuffers();
+    };
+
+    resizeWindow(kWidth1, kHeight1);
+    glUseProgram(program);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // Verify results
+    EXPECT_PIXEL_RECT_EQ(0, 0, kRenderSplitX, kRenderSplitY, GLColor::yellow);
+    EXPECT_PIXEL_RECT_EQ(0, kRenderSplitY, kRenderSplitX, kHeight1 - kRenderSplitY, GLColor::red);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, 0, kWidth1 - kRenderSplitX, kRenderSplitY, GLColor::green);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, kRenderSplitY, kWidth1 - kRenderSplitX,
+                         kHeight1 - kRenderSplitY, GLColor::black);
+
+    resizeWindow(kWidth2, kHeight2);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // Verify results
+    EXPECT_PIXEL_RECT_EQ(0, 0, kRenderSplitX, kRenderSplitY, GLColor::yellow);
+    EXPECT_PIXEL_RECT_EQ(0, kRenderSplitY, kRenderSplitX, kHeight2 - kRenderSplitY, GLColor::red);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, 0, kWidth2 - kRenderSplitX, kRenderSplitY, GLColor::green);
+    EXPECT_PIXEL_RECT_EQ(kRenderSplitX, kRenderSplitY, kWidth2 - kRenderSplitX,
+                         kHeight2 - kRenderSplitY, GLColor::black);
+
+    // Reset window to original dimensions
+    resizeWindow(kWidth, kHeight);
+
+    ASSERT_GL_NO_ERROR();
+}
+
 ANGLE_INSTANTIATE_TEST_ES2_AND(AddMockTextureNoRenderTargetTest,
                                ES2_D3D9().enable(Feature::AddMockTextureNoRenderTarget),
                                ES2_D3D11().enable(Feature::AddMockTextureNoRenderTarget));
@@ -4145,6 +4486,10 @@ ANGLE_INSTANTIATE_TEST_ES3_AND(FramebufferTest_ES3,
                                ES3_VULKAN().enable(Feature::EmulatedPrerotation90),
                                ES3_VULKAN().enable(Feature::EmulatedPrerotation180),
                                ES3_VULKAN().enable(Feature::EmulatedPrerotation270));
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(FramebufferTest_ES3Metal);
+ANGLE_INSTANTIATE_TEST(FramebufferTest_ES3Metal,
+                       ES3_METAL().enable(Feature::LimitMaxColorTargetBitsForTesting));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(FramebufferTest_ES31);
 ANGLE_INSTANTIATE_TEST_ES31(FramebufferTest_ES31);

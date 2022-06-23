@@ -26,26 +26,6 @@ class RendererVk;
 class RenderTargetVk;
 class WindowSurfaceVk;
 
-// FramebufferVk Cache
-class FramebufferCache final : angle::NonCopyable
-{
-  public:
-    FramebufferCache() = default;
-    ~FramebufferCache() { ASSERT(mPayload.empty()); }
-
-    void destroy(RendererVk *rendererVk);
-
-    bool get(ContextVk *contextVk,
-             const vk::FramebufferDesc &desc,
-             vk::FramebufferHelper **framebufferOut);
-    void insert(const vk::FramebufferDesc &desc, vk::FramebufferHelper &&framebufferHelper);
-    void clear(ContextVk *contextVk);
-
-  private:
-    angle::HashMap<vk::FramebufferDesc, vk::FramebufferHelper> mPayload;
-    CacheStats mCacheStats;
-};
-
 class FramebufferVk : public FramebufferImpl
 {
   public:
@@ -244,10 +224,14 @@ class FramebufferVk : public FramebufferImpl
 
     void updateLayerCount();
 
+    void insertCache(ContextVk *contextVk,
+                     const vk::FramebufferDesc &desc,
+                     vk::FramebufferHelper &&newFramebuffer);
+    void resetCache(ContextVk *contextVk);
+
     WindowSurfaceVk *mBackbuffer;
 
     vk::RenderPassDesc mRenderPassDesc;
-    vk::FramebufferHelper *mFramebuffer;
     RenderTargetCache<RenderTargetVk> mRenderTargetCache;
 
     // This variable is used to quickly compute if we need to do a masked clear. If a color
@@ -261,7 +245,12 @@ class FramebufferVk : public FramebufferImpl
     gl::DrawBufferMask mEmulatedAlphaAttachmentMask;
 
     vk::FramebufferDesc mCurrentFramebufferDesc;
-    FramebufferCache mFramebufferCache;
+    // The framebuffer cache actually owns the Framebuffer object and manages its lifetime. We just
+    // store the current VkFramebuffer handle here that associated with mCurrentFramebufferDesc.
+    vk::Framebuffer mCurrentFramebuffer;
+
+    // Track references to the cached Framebuffer object that created out of this object
+    vk::FramebufferCacheManager mFramebufferCacheManager;
 
     vk::ClearValuesArray mDeferredClears;
 

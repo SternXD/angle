@@ -927,8 +927,6 @@ void SerializeShaderState(JsonSerializer *json, const gl::ShaderState &shaderSta
     SerializeShaderVariablesVector(json, shaderState.getAllAttributes());
     SerializeShaderVariablesVector(json, shaderState.getActiveAttributes());
     SerializeShaderVariablesVector(json, shaderState.getActiveOutputVariables());
-    json->addScalar("EarlyFragmentTestsOptimization",
-                    shaderState.getEarlyFragmentTestsOptimization());
     json->addScalar("NumViews", shaderState.getNumViews());
     json->addScalar("SpecConstUsageBits", shaderState.getSpecConstUsageBits().bits());
     if (shaderState.getGeometryShaderInputPrimitiveType().valid())
@@ -1209,6 +1207,11 @@ Result SerializeTextureData(JsonSerializer *json,
     {
         gl::ImageIndex index = imageIter.next();
 
+        // Skip serializing level data if the level index is out of range
+        GLuint levelIndex = index.getLevelIndex();
+        if (levelIndex > texture->getMipmapMaxLevel() || levelIndex < texture->getBaseLevel())
+            continue;
+
         const gl::ImageDesc &desc = texture->getTextureState().getImageDesc(index);
 
         if (desc.size.empty())
@@ -1222,7 +1225,8 @@ Result SerializeTextureData(JsonSerializer *json,
                index.getType() == gl::TextureType::CubeMap ||
                index.getType() == gl::TextureType::CubeMapArray ||
                index.getType() == gl::TextureType::_2DMultisampleArray ||
-               index.getType() == gl::TextureType::_2DMultisample);
+               index.getType() == gl::TextureType::_2DMultisample ||
+               index.getType() == gl::TextureType::External);
 
         GLenum glFormat = format.format;
         GLenum glType   = format.type;

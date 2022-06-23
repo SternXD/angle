@@ -29,6 +29,11 @@ struct FeaturesVk;
 
 namespace rx
 {
+namespace vk
+{
+class SyncHelper;
+}  // namespace vk
+
 class ProgramExecutableVk;
 class RendererVk;
 class WindowSurfaceVk;
@@ -248,7 +253,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                                                 GLsizei stride);
 
     // ShareGroup
-    ShareGroupVk *getShareGroupVk() { return mShareGroupVk; }
+    ShareGroupVk *getShareGroup() { return mShareGroupVk; }
     PipelineLayoutCache &getPipelineLayoutCache()
     {
         return mShareGroupVk->getPipelineLayoutCache();
@@ -447,7 +452,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                                                vk::ImageViewHelper *colorImageView,
                                                vk::ImageHelper *colorImage,
                                                vk::ImageHelper *colorImageMS,
-                                               VkPresentModeKHR presentMode,
+                                               vk::PresentMode presentMode,
                                                bool *imageResolved);
 
     vk::DynamicQueryPool *getQueryPool(gl::QueryType queryType);
@@ -552,7 +557,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     {
         ASSERT(mRenderPassCommands->started());
         mRenderPassCommands->imageWrite(this, level, layerStart, layerCount, aspectFlags,
-                                        imageLayout, vk::AliasingMode::Allowed, image);
+                                        imageLayout, image);
     }
 
     void onColorDraw(gl::LevelIndex level,
@@ -659,16 +664,19 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
 
     angle::Result syncExternalMemory();
 
+    // Either issue a submission or defer it when a sync object is initialized.  If deferred, a
+    // submission will have to be incurred during client wait.
+    angle::Result onSyncObjectInit(vk::SyncHelper *syncHelper, bool isEGLSyncObject);
+    // Called when a sync object is waited on while its submission was deffered in onSyncObjectInit.
+    // It's a no-op if this context doesn't have a pending submission.  Note that due to
+    // mHasDeferredFlush being set, flushing the render pass leads to a submission automatically.
+    angle::Result flushCommandsAndEndRenderPassIfDeferredSyncInit(RenderPassClosureReason reason);
+
     void addCommandBufferDiagnostics(const std::string &commandBufferDiagnostics);
 
     VkIndexType getVkIndexType(gl::DrawElementsType glIndexType) const;
     size_t getVkIndexTypeSize(gl::DrawElementsType glIndexType) const;
     bool shouldConvertUint8VkIndexType(gl::DrawElementsType glIndexType) const;
-
-    ANGLE_INLINE bool isBresenhamEmulationEnabled(const gl::PrimitiveMode mode)
-    {
-        return getFeatures().basicGLLineRasterization.enabled && gl::IsLineMode(mode);
-    }
 
     ProgramExecutableVk *getExecutable() const;
 
@@ -748,6 +756,8 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     {
         mVulkanCacheStats[cache].accumulate(stats);
     }
+
+    std::ostringstream &getPipelineCacheGraphStream() { return mPipelineCacheGraph; }
 
   private:
     // Dirty bits.
@@ -1155,7 +1165,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     angle::Result handleDirtyComputeUniforms();
 
     // Common parts of the common dirty bit handlers.
-    angle::Result handleDirtyUniformsImpl(vk::ResourceUseList *resourceUseList);
+    angle::Result handleDirtyUniformsImpl(vk::CommandBufferHelperCommon *commandBufferHelper);
     angle::Result handleDirtyMemoryBarrierImpl(DirtyBits::Iterator *dirtyBitsIterator,
                                                DirtyBits dirtyBitMask);
     template <typename CommandBufferT>
@@ -1180,10 +1190,11 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                                          DriverUniformsDescriptorSet *driverUniforms,
                                          uint8_t **ptrOut,
                                          bool *newBufferOut);
-    angle::Result updateDriverUniformsDescriptorSet(vk::ResourceUseList *resourceUseList,
-                                                    bool newBuffer,
-                                                    size_t driverUniformsSize,
-                                                    PipelineType pipelineType);
+    angle::Result updateDriverUniformsDescriptorSet(
+        vk::CommandBufferHelperCommon *commandBufferHelper,
+        bool newBuffer,
+        size_t driverUniformsSize,
+        PipelineType pipelineType);
 
     void writeAtomicCounterBufferDriverUniformOffsets(uint32_t *offsetsOut, size_t offsetsSize);
 
@@ -1212,6 +1223,9 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                                                DirtyBits dirtyBitMask,
                                                RenderPassClosureReason reason);
 
+    // Mark the render pass to be closed on the next draw call.  The render pass is not actually
+    // closed and can be restored with restoreFinishedRenderPass if necessary, for example to append
+    // a resolve attachment.
     void onRenderPassFinished(RenderPassClosureReason reason);
 
     void initIndexTypeMap();
@@ -1500,6 +1514,9 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     VkRect2D mScissor;
 
     VulkanCacheStats mVulkanCacheStats;
+
+    // A graph built from pipeline descs and their transitions.
+    std::ostringstream mPipelineCacheGraph;
 };
 
 ANGLE_INLINE angle::Result ContextVk::endRenderPassIfTransformFeedbackBuffer(

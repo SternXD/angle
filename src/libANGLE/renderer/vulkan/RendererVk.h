@@ -38,6 +38,7 @@
 namespace angle
 {
 class Library;
+struct FrontendFeatures;
 }  // namespace angle
 
 namespace egl
@@ -182,6 +183,7 @@ class RendererVk : angle::NonCopyable
     const gl::TextureCapsMap &getNativeTextureCaps() const;
     const gl::Extensions &getNativeExtensions() const;
     const gl::Limitations &getNativeLimitations() const;
+    void initializeFrontendFeatures(angle::FrontendFeatures *features) const;
 
     uint32_t getQueueFamilyIndex() const { return mCurrentQueueFamilyIndex; }
     const VkQueueFamilyProperties &getQueueFamilyProperties() const
@@ -362,12 +364,8 @@ class RendererVk : angle::NonCopyable
         }
     }
 
-    angle::Result getPipelineCache(vk::PipelineCache **pipelineCache);
-    void onNewGraphicsPipeline()
-    {
-        std::unique_lock<std::mutex> lock(mPipelineCacheMutex);
-        mPipelineCacheDirty = true;
-    }
+    angle::Result getPipelineCache(PipelineCacheAccess *pipelineCacheOut);
+    angle::Result mergeIntoPipelineCache(const vk::PipelineCache &pipelineCache);
 
     void onNewValidationMessage(const std::string &message);
     std::string getAndClearLastValidationMessage(uint32_t *countSinceLastClear);
@@ -608,6 +606,12 @@ class RendererVk : angle::NonCopyable
         return mSuballocationGarbageSizeInBytesCachedAtomic.load(std::memory_order_consume);
     }
 
+    ANGLE_INLINE VkFilter getPreferredFilterForYUV()
+    {
+        return getFeatures().preferLinearFilterForYUV.enabled ? VK_FILTER_LINEAR
+                                                              : VK_FILTER_NEAREST;
+    }
+
   private:
     angle::Result initializeDevice(DisplayVk *displayVk, uint32_t queueFamilyIndex);
     void ensureCapsInitialized() const;
@@ -633,6 +637,12 @@ class RendererVk : angle::NonCopyable
 
     // Query and cache supported fragment shading rates
     bool canSupportFragmentShadingRate(const vk::ExtensionNameList &deviceExtensionNames);
+
+    template <typename CommandBufferHelperT, typename RecyclerT>
+    angle::Result getCommandBufferImpl(vk::Context *context,
+                                       vk::CommandPool *commandPool,
+                                       RecyclerT *recycler,
+                                       CommandBufferHelperT **commandBufferHelperOut);
 
     egl::Display *mDisplay;
 
@@ -688,6 +698,7 @@ class RendererVk : angle::NonCopyable
     VkPhysicalDeviceDepthClipControlFeaturesEXT mDepthClipControlFeatures;
     VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT mBlendOperationAdvancedFeatures;
     VkPhysicalDeviceSamplerYcbcrConversionFeatures mSamplerYcbcrConversionFeatures;
+    VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT mPipelineCreationCacheControlFeatures;
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT mExtendedDynamicStateFeatures;
     VkPhysicalDeviceExtendedDynamicState2FeaturesEXT mExtendedDynamicState2Features;
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR mFragmentShadingRateFeatures;
@@ -752,7 +763,7 @@ class RendererVk : angle::NonCopyable
     std::mutex mPipelineCacheMutex;
     vk::PipelineCache mPipelineCache;
     uint32_t mPipelineCacheVkUpdateTimeout;
-    bool mPipelineCacheDirty;
+    size_t mPipelineCacheSizeAtLastSync;
     bool mPipelineCacheInitialized;
 
     // Latest validation data for debug overlay.
@@ -791,6 +802,7 @@ class RendererVk : angle::NonCopyable
 
     // Command buffer pool management.
     std::mutex mCommandBufferRecyclerMutex;
+    vk::CommandBufferHandleAllocator mCommandBufferHandleAllocator;
     vk::CommandBufferRecycler<vk::OutsideRenderPassCommandBuffer,
                               vk::OutsideRenderPassCommandBufferHelper>
         mOutsideRenderPassCommandBufferRecycler;

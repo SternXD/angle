@@ -303,9 +303,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
     {
         case EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE:
             UNREACHABLE();
-#if !UNREACHABLE_IS_NORETURN
             break;
-#endif
 
         case EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE:
         case EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE:
@@ -315,9 +313,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #else
             // A D3D display was requested on a platform that doesn't support it
             UNREACHABLE();
-#    if !UNREACHABLE_IS_NORETURN
             break;
-#    endif
 #endif
 
         case EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE:
@@ -365,9 +361,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #else
             // No display available
             UNREACHABLE();
-#    if !UNREACHABLE_IS_NORETURN
             break;
-#    endif
 
 #endif  // defined(ANGLE_ENABLE_OPENGL)
 
@@ -496,9 +490,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #else
             // No display available
             UNREACHABLE();
-#    if !UNREACHABLE_IS_NORETURN
             break;
-#    endif
 #endif  // defined(ANGLE_ENABLE_VULKAN)
 
         case EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE:
@@ -511,9 +503,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #endif
             // No display available
             UNREACHABLE();
-#if !UNREACHABLE_IS_NORETURN
             break;
-#endif
 
         case EGL_PLATFORM_ANGLE_TYPE_NULL_ANGLE:
 #if defined(ANGLE_ENABLE_NULL)
@@ -522,16 +512,12 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #else
             // No display available
             UNREACHABLE();
-#    if !UNREACHABLE_IS_NORETURN
             break;
-#    endif
 #endif  // defined(ANGLE_ENABLE_NULL)
 
         default:
             UNREACHABLE();
-#if !UNREACHABLE_IS_NORETURN
             break;
-#endif
     }
 
     return impl;
@@ -663,7 +649,7 @@ DisplayState::DisplayState(EGLNativeDisplayType nativeDisplayId)
 
 DisplayState::~DisplayState() {}
 
-// Note that ANGLE support on Ozone platform is limited. Our prefered support Matrix for
+// Note that ANGLE support on Ozone platform is limited. Our preferred support Matrix for
 // EGL_ANGLE_platform_angle on Linux and Ozone/Linux/Fuchsia platforms should be the following:
 //
 // |--------------------------------------------------------|
@@ -854,7 +840,6 @@ Display::Display(EGLenum platform, EGLNativeDisplayType displayId, Device *eglDe
       mGPUSwitchedBinding(this, kGPUSwitchedSubjectIndex),
       mAttributeMap(),
       mConfigSet(),
-      mContextSet(),
       mStreamSet(),
       mInvalidImageSet(),
       mInvalidStreamSet(),
@@ -934,9 +919,9 @@ void Display::onSubjectStateChange(angle::SubjectIndex index, angle::SubjectMess
 {
     ASSERT(index == kGPUSwitchedSubjectIndex);
     ASSERT(message == angle::SubjectMessage::SubjectChanged);
-    for (ContextSet::iterator ctx = mContextSet.begin(); ctx != mContextSet.end(); ctx++)
+    for (gl::Context *context : mState.contextSet)
     {
-        (*ctx)->onGPUSwitch();
+        context->onGPUSwitch();
     }
 }
 
@@ -948,7 +933,7 @@ void Display::setupDisplayPlatform(rx::DisplayImpl *impl)
     SafeDelete(mImplementation);
     mImplementation = impl;
 
-    // TODO(jmadill): Store Platform in Display and init here.
+    // TODO(anglebug.com/7365): Remove PlatformMethods.
     const angle::PlatformMethods *platformMethods =
         reinterpret_cast<const angle::PlatformMethods *>(
             mAttributeMap.get(EGL_PLATFORM_ANGLE_PLATFORM_METHODS_ANGLEX, 0));
@@ -1152,7 +1137,7 @@ Error Display::terminate(Thread *thread, TerminateReason terminateReason)
     // All EGL objects, except contexts, have been marked invalid by the block above and will be
     // cleaned up during eglReleaseThread. If no contexts are current on any thread, perform the
     // cleanup right away.
-    for (gl::Context *context : mContextSet)
+    for (gl::Context *context : mState.contextSet)
     {
         if (context->getRefCount() > 0)
         {
@@ -1169,9 +1154,9 @@ Error Display::terminate(Thread *thread, TerminateReason terminateReason)
     }
 
     // Destroy all of the Contexts for this Display, since none of them are current anymore.
-    while (!mContextSet.empty())
+    while (!mState.contextSet.empty())
     {
-        gl::Context *context = *mContextSet.begin();
+        gl::Context *context = *mState.contextSet.begin();
         context->setIsDestroyed();
         ANGLE_TRY(releaseContext(context, thread));
     }
@@ -1500,7 +1485,7 @@ Error Display::createContext(const Config *configuration,
     }
 
     ASSERT(context != nullptr);
-    mContextSet.insert(context);
+    mState.contextSet.insert(context);
 
     ASSERT(outContext != nullptr);
     *outContext = context;
@@ -1593,7 +1578,8 @@ Error Display::makeCurrent(Thread *thread,
 
 Error Display::restoreLostDevice()
 {
-    for (ContextSet::iterator ctx = mContextSet.begin(); ctx != mContextSet.end(); ctx++)
+    for (ContextSet::iterator ctx = mState.contextSet.begin(); ctx != mState.contextSet.end();
+         ctx++)
     {
         if ((*ctx)->isResetNotificationEnabled())
         {
@@ -1659,8 +1645,8 @@ Error Display::releaseContext(gl::Context *context, Thread *thread)
 
     // Use scoped_ptr to make sure the context is always freed.
     std::unique_ptr<gl::Context> unique_context(context);
-    ASSERT(mContextSet.find(context) != mContextSet.end());
-    mContextSet.erase(context);
+    ASSERT(mState.contextSet.find(context) != mState.contextSet.end());
+    mState.contextSet.erase(context);
 
     if (context->usingDisplayTextureShareGroup())
     {
@@ -1740,7 +1726,7 @@ Error Display::destroyContext(Thread *thread, gl::Context *context)
     // we can now fully terminate the display and release all of its resources.
     if (mIsTerminated)
     {
-        for (const gl::Context *ctx : mContextSet)
+        for (const gl::Context *ctx : mState.contextSet)
         {
             if (ctx->getRefCount() > 0)
             {
@@ -1807,8 +1793,8 @@ void Display::notifyDeviceLost()
         return;
     }
 
-    for (ContextSet::iterator context = mContextSet.begin(); context != mContextSet.end();
-         context++)
+    for (ContextSet::iterator context = mState.contextSet.begin();
+         context != mState.contextSet.end(); context++)
     {
         (*context)->markContextLost(gl::GraphicsResetStatus::UnknownContextReset);
     }
@@ -1877,7 +1863,7 @@ bool Display::isValidConfig(const Config *config) const
 
 bool Display::isValidContext(const gl::Context *context) const
 {
-    return mContextSet.find(const_cast<gl::Context *>(context)) != mContextSet.end();
+    return mState.contextSet.find(const_cast<gl::Context *>(context)) != mState.contextSet.end();
 }
 
 bool Display::isValidSurface(const Surface *surface) const
@@ -1923,6 +1909,10 @@ static ClientExtensions GenerateClientExtensions()
 
 #if defined(ANGLE_USE_GBM)
     extensions.platformGbmKHR = true;
+#endif
+
+#if defined(ANGLE_USE_WAYLAND)
+    extensions.platformWaylandEXT = true;
 #endif
 
 #if defined(ANGLE_ENABLE_D3D11)
@@ -2021,8 +2011,8 @@ void Display::initDisplayExtensions()
     mDisplayExtensions = mImplementation->getExtensions();
 
     // Some extensions are always available because they are implemented in the EGL layer.
-    mDisplayExtensions.createContext                      = true;
-    mDisplayExtensions.createContextNoError               = true;
+    mDisplayExtensions.createContext        = true;
+    mDisplayExtensions.createContextNoError = !mFrontendFeatures.forceGlErrorChecking.enabled;
     mDisplayExtensions.createContextWebGLCompatibility    = true;
     mDisplayExtensions.createContextBindGeneratesResource = true;
     mDisplayExtensions.createContextClientArrays          = true;
